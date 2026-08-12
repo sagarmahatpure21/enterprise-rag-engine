@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+vectorstore_index/
+data/uploads/
+*.egg-info/
+.DS_Store
+.pytest_cache/
+.streamlit/secrets.toml
+*.faiss
+*.pkl
+data/sample_docs/*
+!data/sample_docs/*.md
+source/

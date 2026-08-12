@@ -1,0 +1,32 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: rag-api
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - vector_index:/app/vectorstore_index
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.streamlit
+    container_name: rag-ui
+    depends_on:
+      - api
+    environment:
+      - RAG_API_URL=http://api:8000
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+
+volumes:
+  vector_index:
