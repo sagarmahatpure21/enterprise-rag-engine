@@ -24,13 +24,11 @@ def get_embeddings() -> HuggingFaceEmbeddings:
 
 class VectorStoreManager:
     # basically a wrapper around FAISS so I don't repeat load/save logic everywhere
-
     def __init__(self):
         self.embeddings = get_embeddings()
         self._store: Optional[FAISS] = None
 
     def load(self) -> bool:
-        # tries to load an existing index from disk, returns False if there isn't one yet
         index_file = config.VECTOR_STORE_DIR / f"{_FAISS_INDEX_NAME}.faiss"
         if not index_file.exists():
             return False
@@ -39,20 +37,23 @@ class VectorStoreManager:
             self.embeddings,
             index_name=_FAISS_INDEX_NAME,
             allow_dangerous_deserialization=True,
+            normalize_L2=True,
         )
         return True
 
     def build(self, chunks: List[Document]) -> None:
-        # builds the index if it doesn't exist yet, otherwise just adds to it
         if not chunks:
             raise ValueError("No chunks provided to build the vector store.")
 
         if self._store is None:
-            self._store = FAISS.from_documents(chunks, self.embeddings)
+            self._store = FAISS.from_documents(
+                chunks,
+                self.embeddings,
+                normalize_L2=True,
+            )
         else:
             self._store.add_documents(chunks)
 
-        # save to disk right away so we don't lose it on restart
         self._store.save_local(str(config.VECTOR_STORE_DIR), index_name=_FAISS_INDEX_NAME)
         logger.info("Indexed %d chunks into FAISS.", len(chunks))
 
@@ -70,7 +71,6 @@ class VectorStoreManager:
         if self._store is None:
             return 0
         return self._store.index.ntotal
-
 
 # keeping one shared instance so we don't reload the model on every request
 _manager: Optional[VectorStoreManager] = None

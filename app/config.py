@@ -25,7 +25,7 @@ EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", "sentence-transformers/all-Mi
 
 # LLM settings - using Groq's free API instead of running a model locally
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-LLM_MODEL = os.getenv("RAG_LLM_MODEL", "llama-3.1-8b-instant")
+LLM_MODEL = os.getenv("RAG_LLM_MODEL", "openai/gpt-oss-20b")
 LLM_TEMPERATURE = float(os.getenv("RAG_LLM_TEMPERATURE", "0.1"))
 
 # chunking settings

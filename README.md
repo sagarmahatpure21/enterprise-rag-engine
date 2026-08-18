@@ -1,191 +1,452 @@
 # RAG-Based Enterprise Knowledge Assistant
 
-An AI-powered Retrieval-Augmented Generation (RAG) engine for enterprise knowledge retrieval and Q&A. Upload your documents, ask questions in plain English, and get accurate answers with exact source citations — no more digging through folders to find one fact.
+An enterprise-focused Retrieval-Augmented Generation (RAG) application for searching documents and answering questions in natural language with source-grounded responses.
 
-Built with **FastAPI**, **Streamlit**, **LangChain**, and **FAISS**. Uses **Sentence-Transformers** for local, on-device embeddings and the **Groq API** for fast LLM-generated answers. Fully containerized with **Docker**.
+Users can upload supported documents, ask questions about their contents, and receive answers based on retrieved document chunks together with source citations.
+
+Built with **FastAPI**, **Streamlit**, **LangChain**, **FAISS**, **Sentence-Transformers**, **Groq**, and **Docker**.
+
+> This is a portfolio-scale project designed to demonstrate practical RAG, semantic search, vector retrieval, API development, and LLM integration. It is not a production enterprise knowledge-management platform.
 
 ---
 
 ## Table of Contents
 
-- [Why This Exists](#why-this-exists)
-- [How It Works](#how-it-works)
-- [Tech Stack](#tech-stack)
-- [Project Structure](#project-structure)
-- [Getting Started](#getting-started)
-- [Running with Docker](#running-with-docker)
-- [API Reference](#api-reference)
-- [Configuration](#configuration)
-- [Running Tests](#running-tests)
-- [Design Notes](#design-notes)
-- [Limitations](#limitations)
-- [License](#license)
+* [Overview](#overview)
+* [Why RAG](#why-rag)
+* [Architecture](#architecture)
+* [How It Works](#how-it-works)
+* [Tech Stack](#tech-stack)
+* [Project Structure](#project-structure)
+* [Supported Documents](#supported-documents)
+* [Getting Started](#getting-started)
+* [Running with Docker](#running-with-docker)
+* [API Reference](#api-reference)
+* [RAG Query Example](#rag-query-example)
+* [Configuration](#configuration)
+* [Design Decisions](#design-decisions)
+* [Limitations](#limitations)
+* [Application Screenshots](#application-screenshots)
 
 ---
 
-## Why This Exists
+## Overview
 
-Keyword search only finds documents containing the *exact words* you typed. If a policy document says "annual leave" and you search "vacation days," keyword search comes up empty — even though it's the right document.
+Traditional keyword search depends heavily on exact words appearing in a document.
 
-This project uses semantic search instead: it converts both your documents and your questions into vectors that capture *meaning*, so it finds the right passage even when your wording doesn't match the source text. It then hands only the relevant passages to an LLM, which answers using that context — and every answer comes with a citation back to its exact source.
+For example, a policy may discuss **annual leave**, while a user asks:
+
+> How many vacation days do employees receive?
+
+A keyword search may miss the relevant passage because the wording is different.
+
+This project uses **semantic retrieval** instead. Documents and user questions are converted into vector representations, allowing the system to retrieve passages based on meaning rather than exact keyword matches.
+
+The retrieved passages are then supplied to an LLM through a RAG prompt. The model generates an answer using that retrieved context, while the application exposes the source documents and retrieved chunks used to support the answer.
+
+---
+
+## Why RAG
+
+The system separates knowledge retrieval from answer generation:
+
+```text
+Documents
+   |
+   v
+Chunking
+   |
+   v
+Local Embeddings
+   |
+   v
+FAISS Vector Index
+   |
+   +--------------------+
+                        |
+                   User Question
+                        |
+                        v
+                 Query Embedding
+                        |
+                        v
+                  FAISS Search
+                        |
+                        v
+                Top-K Chunks
+                        |
+                        v
+             Context + Question
+                        |
+                        v
+              Groq LLM Generation
+                        |
+                        v
+                Answer + Citations
+```
+
+This design allows the LLM to answer using retrieved document context instead of relying only on information stored in the model's parameters.
+
+---
+
+## Architecture
+
+```text
+                         +----------------------+
+                         |   PDF / TXT / MD     |
+                         |      Documents       |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         |  LangChain Loading   |
+                         |   + Chunking         |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         | Sentence-Transformers|
+                         |  Local Embeddings    |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         |   FAISS Vector       |
+                         |       Index          |
+                         +----------+-----------+
+                                    |
+                                    |
+                       +------------v-------------+
+                       |       User Question      |
+                       +------------+-------------+
+                                    |
+                                    v
+                         +----------------------+
+                         | Query Embedding      |
+                         | Same Embedding Model |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         | FAISS Similarity      |
+                         | Search                |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         | Top-K Relevant        |
+                         | Chunks                |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         | RAG Prompt            |
+                         | Context + Question    |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         | Groq API              |
+                         | openai/gpt-oss-20b    |
+                         +----------+-----------+
+                                    |
+                                    v
+                         +----------------------+
+                         | Answer + Source       |
+                         | Citations             |
+                         +----------------------+
+
+        FastAPI -------------------- REST API
+        Streamlit ------------------ User Interface
+        Docker Compose ------------- Containerized Deployment
+```
+
+Embeddings and vector retrieval run locally. The application sends the final retrieval context and user question to Groq for answer generation.
+
+---
 
 ## How It Works
 
-```
-Documents (PDF / TXT / MD)
-        |
-        v
-  Load + Chunk (LangChain)
-        |
-        v
-  Embed locally (Sentence-Transformers)
-        |
-        v
-  Store in FAISS index
-        |
-        v
-  ─────────────────────────
-        |
-   User question
-        |
-        v
-  Embed question (same model)
-        |
-        v
-  Similarity search in FAISS
-        |
-        v
-  Top-K relevant chunks retrieved
-        |
-        v
-  Prompt built (context + question)
-        |
-        v
-  Groq LLM generates the answer   <- only step that leaves your machine
-        |
-        v
-  Answer + citations returned to the UI
+### 1. Document ingestion
+
+The application accepts:
+
+* PDF
+* TXT
+* Markdown (`.md`)
+
+Documents are loaded and split into smaller chunks using LangChain.
+
+### 2. Embedding generation
+
+Each document chunk is converted into a vector using the local Sentence-Transformers model:
+
+```text
+sentence-transformers/all-MiniLM-L6-v2
 ```
 
-Embeddings and retrieval run **entirely locally** — only the final prompt (retrieved text + your question, never the raw documents) is sent to Groq for answer generation.
+This runs locally and does not require an external embedding API.
+
+### 3. FAISS indexing
+
+The generated vectors are stored in a local FAISS index.
+
+FAISS provides similarity search over the embedded document chunks without requiring a separate vector-database service.
+
+### 4. Query processing
+
+When a user asks a question:
+
+```text
+User Question
+      |
+      v
+Query Embedding
+      |
+      v
+FAISS Similarity Search
+      |
+      v
+Top-K Relevant Chunks
+```
+
+The system retrieves the most relevant chunks from the document collection.
+
+### 5. RAG generation
+
+The retrieved chunks and the original question are placed into the RAG prompt and sent to the configured Groq model:
+
+```text
+openai/gpt-oss-20b
+```
+
+The generated response is returned to the API and displayed in the Streamlit interface.
+
+### 6. Citations
+
+Citations are generated from the retrieved chunk metadata rather than relying on the LLM to invent source references.
+
+The interface displays the source document, chunk identifier, retrieved content, and relevance information.
+
+---
 
 ## Tech Stack
 
-| Layer | Technology | Purpose |
-|---|---|---|
-| Frontend | [Streamlit](https://streamlit.io) | Chat interface with file upload and source citations |
-| Backend / API | [FastAPI](https://fastapi.tiangolo.com) | REST API for ingestion and querying |
-| Orchestration | [LangChain](https://www.langchain.com) | Document loading, chunking, prompt chaining |
-| Embeddings | [Sentence-Transformers](https://www.sbert.net) (`all-MiniLM-L6-v2`) | Local, free, CPU-based text embeddings |
-| Vector store | [FAISS](https://github.com/facebookresearch/faiss) | Fast similarity search over embedded chunks |
-| LLM | [Groq API](https://console.groq.com) (`llama-3.1-8b-instant`) | Fast, hosted answer generation |
-| Containerization | Docker / Docker Compose | Reproducible two-container deployment |
+| Layer            | Technology                                 | Purpose                                                            |
+| ---------------- | ------------------------------------------ | ------------------------------------------------------------------ |
+| Frontend         | Streamlit                                  | Interactive document upload and chat interface                     |
+| Backend / API    | FastAPI                                    | REST API for ingestion, querying, statistics, and index management |
+| Orchestration    | LangChain                                  | Document loading, chunking, and RAG workflow components            |
+| Embeddings       | Sentence-Transformers (`all-MiniLM-L6-v2`) | Local CPU-based document and query embeddings                      |
+| Vector Store     | FAISS                                      | Local similarity search over embedded chunks                       |
+| LLM              | Groq API (`openai/gpt-oss-20b`)            | Hosted answer generation                                           |
+| Containerization | Docker / Docker Compose                    | Reproducible API and UI deployment                                 |
+
+---
 
 ## Project Structure
 
-```
+```text
 enterprise-rag-engine/
 ├── app/
-│   ├── config.py         # Settings: models, paths, chunk size, API key
-│   ├── ingestion.py       # Document loading + chunking
-│   ├── vectorstore.py     # Local embeddings + FAISS
-│   ├── rag_chain.py       # Retrieval + prompt + Groq generation
-│   └── main.py            # FastAPI app and endpoints
+│   ├── __init__.py
+│   ├── config.py              # Application configuration and model settings
+│   ├── ingestion.py           # Document loading and chunking
+│   ├── vectorstore.py         # Embeddings and FAISS operations
+│   ├── rag_chain.py           # Retrieval, prompt construction, and LLM generation
+│   └── main.py                # FastAPI application and REST endpoints
+│
 ├── streamlit_ui/
-│   └── app.py             # Chat UI
+│   └── app.py                 # Streamlit user interface
+│
 ├── scripts/
-│   └── ingest_cli.py       # Bulk-ingest documents from the command line
+│   └── ingest_cli.py          # Command-line document ingestion
+│
 ├── docker/
 │   ├── Dockerfile.api
 │   └── Dockerfile.streamlit
+│
 ├── data/
-│   └── sample_docs/        # Sample HR / IT / onboarding docs to try it out
-├── tests/
-│   └── test_ingestion.py
+│   └── sample_docs/           # Bundled sample Markdown documents
+│
+├── screenshots/
+│   ├── 01-fastapi-swagger-api.png
+│   ├── 02-fastapi-swagger-schemas.png
+│   ├── 03-streamlit-knowledge-base.png
+│   ├── 04-rag-query-response.png
+│   ├── 05-rag-source-citations.png
+│   └── 06-rag-source-details.png
+│
 ├── docker-compose.yml
 ├── requirements.txt
-└── .env.example
+├── .env.example
+└── README.md
 ```
+
+Generated vector indexes, uploaded documents, virtual environments, secrets, and other local artifacts are excluded through `.gitignore`.
+
+---
+
+## Supported Documents
+
+The application supports:
+
+```text
+PDF
+TXT
+Markdown (.md)
+```
+
+The repository includes sample Markdown documents for testing the ingestion and retrieval workflow.
+
+Additional documents can be uploaded through the Streamlit interface or the API.
+
+---
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.11+
-- A free [Groq API key](https://console.groq.com) — no credit card required
+* Python 3.11+
+* Git
+* A Groq API key
+* Docker and Docker Compose for containerized execution
 
-### 1. Clone and set up a virtual environment
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/sagarmahatpure21/enterprise-rag-engine.git
 cd enterprise-rag-engine
-python -m venv venv
-source venv/bin/activate      # Windows: venv\Scripts\activate
 ```
 
-### 2. Install dependencies
+### 2. Create and activate a virtual environment
+
+```bash
+python -m venv venv
+```
+
+Linux / WSL2:
+
+```bash
+source venv/bin/activate
+```
+
+Windows:
+
+```powershell
+venv\Scripts\activate
+```
+
+### 3. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment variables
+### 4. Configure environment variables
+
+Copy the example environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Open `.env` and paste in your `GROQ_API_KEY`.
+Open `.env` and add your Groq API key:
 
-### 4. Ingest the sample documents
+```text
+GROQ_API_KEY=your_groq_api_key
+```
+
+Do not commit the real `.env` file or API key to GitHub.
+
+### 5. Ingest the sample documents
 
 ```bash
 python -m scripts.ingest_cli --path data/sample_docs
 ```
 
-This builds your first FAISS index. The first run also downloads the embedding model (~80MB, one-time — needs internet access).
+This creates the FAISS index from the sample documents.
 
-### 5. Start the API
+The first execution also downloads the Sentence-Transformers embedding model if it is not already available locally.
+
+### 6. Start the FastAPI backend
 
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-Interactive API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
+FastAPI documentation:
 
-### 6. Start the UI (in a separate terminal)
+```text
+http://localhost:8000/docs
+```
+
+### 7. Start the Streamlit interface
+
+Open a second terminal and activate the same virtual environment:
 
 ```bash
 source venv/bin/activate
+```
+
+Then:
+
+```bash
 streamlit run streamlit_ui/app.py
 ```
 
-Open [http://localhost:8501](http://localhost:8501) and start chatting with your documents.
+Open:
+
+```text
+http://localhost:8501
+```
+
+---
 
 ## Running with Docker
+
+The application can also be started using Docker Compose:
 
 ```bash
 docker compose up --build
 ```
 
-Make sure `.env` contains a valid `GROQ_API_KEY` before running — the API container reads it via `env_file`. This starts two containers:
+Before starting the containers, make sure `.env` contains a valid:
 
-| Service | Port | Description |
-|---|---|---|
-| `api` | 8000 | FastAPI backend |
-| `ui` | 8501 | Streamlit frontend |
+```text
+GROQ_API_KEY
+```
+
+The deployment contains two application services:
+
+| Service | Port | Role               |
+| ------- | ---: | ------------------ |
+| `api`   | 8000 | FastAPI backend    |
+| `ui`    | 8501 | Streamlit frontend |
+
+---
 
 ## API Reference
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Liveness check |
-| `GET` | `/stats` | Index size, embedding/LLM model, chunk settings |
-| `POST` | `/ingest` | Upload one or more documents to embed and index |
-| `POST` | `/query` | Ask a question, get an answer + citations |
-| `DELETE` | `/index` | Clear the vector index |
+| Method   | Endpoint  | Description                                          |
+| -------- | --------- | ---------------------------------------------------- |
+| `GET`    | `/health` | Application health check                             |
+| `GET`    | `/stats`  | Index size and model/chunk configuration             |
+| `POST`   | `/ingest` | Upload and index documents                           |
+| `POST`   | `/query`  | Ask a question and retrieve an answer with citations |
+| `DELETE` | `/index`  | Clear the local vector index                         |
 
-**Example query:**
+FastAPI also exposes an interactive Swagger UI at:
+
+```text
+http://localhost:8000/docs
+```
+
+---
+
+## RAG Query Example
+
+Example request:
 
 ```bash
 curl -X POST http://localhost:8000/query \
@@ -193,12 +454,12 @@ curl -X POST http://localhost:8000/query \
   -d '{"question": "How many days of annual leave do employees get?"}'
 ```
 
-**Example response:**
+Example response:
 
 ```json
 {
   "question": "How many days of annual leave do employees get?",
-  "answer": "Full-time employees accrue 24 days of paid annual leave per year, credited at 2 days per month. (Source: hr_leave_policy.md)",
+  "answer": "Full-time employees accrue 24 days of paid annual leave per year, credited at 2 days per month.",
   "citations": [
     {
       "source": "hr_leave_policy.md",
@@ -211,63 +472,104 @@ curl -X POST http://localhost:8000/query \
 }
 ```
 
+The exact response depends on the indexed documents and retrieved context.
+
+---
+
 ## Configuration
 
-All settings are controlled via environment variables (see `.env.example`):
+The application exposes its main runtime settings through environment variables:
 
-| Variable | Default | Description |
-|---|---|---|
-| `GROQ_API_KEY` | — | Your Groq API key (required) |
-| `RAG_LLM_MODEL` | `llama-3.1-8b-instant` | Groq model used for generation |
-| `RAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Local embedding model |
-| `RAG_CHUNK_SIZE` | `1000` | Characters per chunk |
-| `RAG_CHUNK_OVERLAP` | `150` | Overlap between consecutive chunks |
-| `RAG_TOP_K` | `4` | Number of chunks retrieved per question |
-| `RAG_API_URL` | `http://localhost:8000` | Backend URL the Streamlit UI calls |
+| Variable              | Default                                  | Description                                 |
+| --------------------- | ---------------------------------------- | ------------------------------------------- |
+| `GROQ_API_KEY`        | —                                        | Groq API key                                |
+| `RAG_LLM_MODEL`       | `openai/gpt-oss-20b`                     | Groq model used for answer generation       |
+| `RAG_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Local embedding model                       |
+| `RAG_CHUNK_SIZE`      | `1000`                                   | Characters per document chunk               |
+| `RAG_CHUNK_OVERLAP`   | `150`                                    | Overlap between consecutive chunks          |
+| `RAG_TOP_K`           | `4`                                      | Number of chunks retrieved per query        |
+| `RAG_API_URL`         | `http://localhost:8000`                  | API endpoint used by the Streamlit frontend |
 
-## Running Tests
+Keep the README, `.env.example`, and application configuration synchronized when changing the LLM model.
 
-```bash
-pytest tests/ -v
+---
+
+## Design Decisions
+
+### Local embeddings
+
+The embedding model runs locally using Sentence-Transformers.
+
+This avoids an external embedding API and keeps the embedding stage local to the machine.
+
+### FAISS instead of a separate vector database
+
+FAISS provides the similarity-search capability required by this project without requiring another database service.
+
+The vector index is stored locally and can be recreated from the source documents.
+
+### Hosted LLM
+
+Answer generation uses the Groq API with:
+
+```text
+openai/gpt-oss-20b
 ```
 
-Ingestion and chunking tests run with no external services or API key required.
+This keeps the local application lightweight while providing access to hosted inference.
 
-## Design Notes
+### Retrieval-grounded citations
 
-- **Local embeddings, hosted LLM by design, not by accident.** Embedding is cheap and fast enough to run on any CPU for free, so it stays local — keeping document text on-device. Generation benefits far more from fast, hosted inference, so that's the one call sent to Groq.
-- **Citations come from retrieval metadata, not the LLM's own text.** Every citation is built directly from the chunks actually retrieved, so it stays accurate regardless of how well the model references its sources in prose.
-- **FAISS only.** No separate vector database server to run — the entire index is just files on disk.
-- **Supported file types are PDF, TXT, and MD.** Kept deliberately narrow to keep the codebase simple and easy to reason about.
+The application derives citation information from the retrieved chunk metadata rather than relying on the LLM to generate source references itself.
+
+This keeps the displayed source information tied to the actual retrieval results.
+
+### Limited document formats
+
+The project intentionally focuses on PDF, TXT, and Markdown documents to keep ingestion and retrieval behavior straightforward and easy to understand.
+
+---
 
 ## Limitations
 
-This is a portfolio-scale project, not a production system. Notably missing:
+This is a portfolio-scale project rather than a production enterprise system.
 
-- No authentication or access control on any endpoint
-- No rate limiting (Groq's free tier has usage limits)
-- No duplicate-document detection on ingestion
-- No automated evaluation of answer quality
-- CORS is wide open (`allow_origins=["*"]`)
+Current limitations include:
 
-See the codebase's inline comments in `app/main.py` and `app/config.py` for more context on these trade-offs.
+* No authentication or authorization layer
+* No rate limiting
+* No duplicate-document detection
+* No automated test suite
+* No automated end-to-end answer-quality evaluation
+* Local FAISS storage rather than a production vector database
+* CORS is configured broadly for development
+* Groq API availability and usage limits affect answer generation
+* Retrieval quality depends on chunking, embeddings, and the indexed document collection
+
+---
 
 ## Application Screenshots
 
 ### FastAPI Swagger API
+
 ![FastAPI Swagger API](screenshots/01-fastapi-swagger-api.png)
 
 ### FastAPI Swagger Schemas
+
 ![FastAPI Swagger Schemas](screenshots/02-fastapi-swagger-schemas.png)
 
 ### Streamlit Knowledge Base
+
 ![Streamlit Knowledge Base](screenshots/03-streamlit-knowledge-base.png)
+![Streamlit Knowledge Base](screenshots/03-streamlit-knowledge-base_1.png)
+![Streamlit Knowledge Base](screenshots/03-streamlit-knowledge-base_2.png)
+![Streamlit Knowledge Base](screenshots/03-streamlit-knowledge-base_3.png)
 
 ### RAG Query and Response
+
 ![RAG Query and Response](screenshots/04-rag-query-response.png)
+![RAG Query and Response](screenshots/04-rag-query-response_1.png)
+![RAG Query and Response](screenshots/04-rag-query-response_2.png)
 
-### RAG Source Citations
-![RAG Source Citations](screenshots/05-rag-source-citations.png)
+The screenshots demonstrate the API, document-management interface, question answering, retrieved sources, and citation information. The example questions and documents shown in the screenshots are demonstration data and may differ from the bundled sample Markdown documents.
 
-### RAG Source Details and Retrieved Context
-![RAG Source Details and Retrieved Context](screenshots/06-rag-source-details.png)
