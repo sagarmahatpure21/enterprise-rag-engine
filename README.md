@@ -567,7 +567,6 @@ Current limitations include:
 
 ### RAG Query and Response
 
-![RAG Query and Response](screenshots/04-rag-query-response.png)
 ![RAG Query and Response](screenshots/04-rag-query-response_1.png)
 ![RAG Query and Response](screenshots/04-rag-query-response_2.png)
 
